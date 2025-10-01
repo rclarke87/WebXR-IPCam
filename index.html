@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebXR Camera Viewer</title>
+    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+</head>
+<body>
+    <a-scene>
+        <!-- Sky background -->
+        <a-sky color="#232323"></a-sky>
+        
+        <!-- Living Room Camera Screen -->
+        <a-video 
+            id="livingroom-screen"
+            src="#livingroom-video"
+            position="-2 1.6 -3" 
+            width="2.4" 
+            height="1.8"
+        ></a-video>
+        
+        <a-text 
+            value="Living Room" 
+            position="-2 2.8 -3" 
+            align="center"
+            color="#00ff00"
+            width="3"
+        ></a-text>
+        
+        <!-- Kitchen Camera Screen -->
+        <a-video 
+            id="kitchen-screen"
+            src="#kitchen-video"
+            position="2 1.6 -3" 
+            width="2.4" 
+            height="1.8"
+        ></a-video>
+        
+        <a-text 
+            value="Kitchen" 
+            position="2 2.8 -3" 
+            align="center"
+            color="#00ff00"
+            width="3"
+        ></a-text>
+        
+        <!-- Mute Button for Living Room -->
+        <a-box 
+            id="muteButtonLR"
+            position="-2 0.5 -3" 
+            width="0.3" 
+            height="0.3" 
+            depth="0.1"
+            color="#ff0000"
+            class="clickable"
+        ></a-box>
+        
+        <a-text 
+            id="muteLabelLR"
+            value="LR: MUTED" 
+            position="-2 0.2 -3" 
+            align="center"
+            color="#ffffff"
+            width="2"
+        ></a-text>
+        
+        <!-- Mute Button for Kitchen -->
+        <a-box 
+            id="muteButtonK"
+            position="2 0.5 -3" 
+            width="0.3" 
+            height="0.3" 
+            depth="0.1"
+            color="#ff0000"
+            class="clickable"
+        ></a-box>
+        
+        <a-text 
+            id="muteLabelK"
+            value="K: MUTED" 
+            position="2 0.2 -3" 
+            align="center"
+            color="#ffffff"
+            width="2"
+        ></a-text>
+        
+        <!-- Status text -->
+        <a-text 
+            id="status"
+            value="Connecting to streams..." 
+            position="0 0.5 -2" 
+            align="center"
+            color="#ffff00"
+            width="4"
+        ></a-text>
+        
+        <!-- Camera (your viewpoint) -->
+        <a-camera>
+            <a-cursor></a-cursor>
+        </a-camera>
+    </a-scene>
+    
+    <!-- Video elements (not visible, used as texture sources) -->
+    <video id="livingroom-video" autoplay playsinline muted style="display:none"></video>
+    <video id="kitchen-video" autoplay playsinline muted style="display:none"></video>
+    
+    <script>
+        // Stream URLs
+        const LIVINGROOM_URL = 'https://unrecipient-salutarily-candra.ngrok-free.dev/mediamtx/livingroom/';
+        const KITCHEN_URL = 'https://unrecipient-salutarily-candra.ngrok-free.dev/mediamtx/kitchen/';
+        
+        // Video elements
+        const lrVideo = document.getElementById('livingroom-video');
+        const kVideo = document.getElementById('kitchen-video');
+        const statusText = document.getElementById('status');
+        
+        // Mute state
+        let lrMuted = true;
+        let kMuted = true;
+        
+        // Function to connect to WebRTC stream
+        async function connectWebRTC(url, videoElement, name) {
+            try {
+                const pc = new RTCPeerConnection();
+                
+                // Handle incoming tracks
+                pc.ontrack = (event) => {
+                    console.log(`${name}: Got track`, event.track.kind);
+                    videoElement.srcObject = event.streams[0];
+                    
+                    // Wait for video to have data before marking as ready
+                    videoElement.onloadeddata = () => {
+                        console.log(`${name}: Video has data and is ready`);
+                        videoElement.play().catch(e => console.error(`${name}: Play failed`, e));
+                    };
+                };
+                
+                // Add transceiver to receive video
+                pc.addTransceiver('video', { direction: 'recvonly' });
+                pc.addTransceiver('audio', { direction: 'recvonly' });
+                
+                // Create offer
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                
+                // Send offer to mediamtx
+                const response = await fetch(url + 'whep', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/sdp',
+                    },
+                    body: offer.sdp,
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                // Get answer and set remote description
+                const answer = await response.text();
+                await pc.setRemoteDescription({
+                    type: 'answer',
+                    sdp: answer,
+                });
+                
+                console.log(`${name}: Connected successfully`);
+                return pc;
+                
+            } catch (error) {
+                console.error(`${name}: Connection failed`, error);
+                statusText.setAttribute('value', `Error: ${error.message}`);
+                throw error;
+            }
+        }        
+        // Connect to both streams
+        async function init() {
+            try {
+                statusText.setAttribute('value', 'Connecting to Living Room...');
+                await connectWebRTC(LIVINGROOM_URL, lrVideo, 'Living Room');
+                
+                statusText.setAttribute('value', 'Connecting to Kitchen...');
+                await connectWebRTC(KITCHEN_URL, kVideo, 'Kitchen');
+                
+                statusText.setAttribute('value', 'Both streams connected!');
+                
+                // Hide status after 3 seconds
+                setTimeout(() => {
+                    statusText.setAttribute('visible', 'false');
+                }, 3000);
+                
+            } catch (error) {
+                console.error('Failed to initialize streams:', error);
+            }
+        }
+        
+        // Mute button handlers
+        const muteButtonLR = document.getElementById('muteButtonLR');
+        const muteLabelLR = document.getElementById('muteLabelLR');
+        
+        muteButtonLR.addEventListener('click', function() {
+            lrMuted = !lrMuted;
+            lrVideo.muted = lrMuted;
+            
+            if (lrMuted) {
+                muteButtonLR.setAttribute('color', '#ff0000');
+                muteLabelLR.setAttribute('value', 'LR: MUTED');
+            } else {
+                muteButtonLR.setAttribute('color', '#00ff00');
+                muteLabelLR.setAttribute('value', 'LR: UNMUTED');
+            }
+        });
+        
+        const muteButtonK = document.getElementById('muteButtonK');
+        const muteLabelK = document.getElementById('muteLabelK');
+        
+        muteButtonK.addEventListener('click', function() {
+            kMuted = !kMuted;
+            kVideo.muted = kMuted;
+            
+            if (kMuted) {
+                muteButtonK.setAttribute('color', '#ff0000');
+                muteLabelK.setAttribute('value', 'K: MUTED');
+            } else {
+                muteButtonK.setAttribute('color', '#00ff00');
+                muteLabelK.setAttribute('value', 'K: UNMUTED');
+            }
+        });
+        
+        // Start connections when page loads
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
